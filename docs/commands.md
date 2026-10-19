@@ -252,17 +252,16 @@ npx skills rm my-skill
 | `-y, --yes`    | Skip confirmation prompts                        |
 | `--all`        | Shorthand for `--skill '*' --agent '*' -y`       |
 
-## Experimental commands
+## `skills sync`
 
-These commands are still experimental. Their names, options, and behavior may change.
-
-### Sync skills from npm packages
+Sync skills from npm packages and `package.json` declarations. `experimental_sync`
+remains supported as an alias.
 
 Install a package that ships skills, then sync them into your project:
 
 ```bash
 npm install -D skills agent-browser
-npx skills experimental_sync -y
+npx skills sync -y
 ```
 
 Sync reads installed dependencies declared in your project's `package.json`, including
@@ -276,21 +275,21 @@ The `.agents/skills/` directory is the shared location. Selecting Claude Code al
 creates links under `.claude/skills/` pointing to the shared skills:
 
 ```bash
-npx skills experimental_sync -a claude-code -y
+npx skills sync -a claude-code -y
 ```
 
 Outside an agent, sync detects installed agents. When run inside a coding agent,
 it targets that agent automatically unless you pass `-a` to select others.
 
-Currently, remote skills already recorded as installed are skipped even if a
-selected agent's link is missing. Packaged skills are relinked on every run.
+Already downloaded remote skills are reused to create missing agent links without
+fetching their source again. Packaged skills are relinked on every run.
 
 To run sync after dependency installation, add a `prepare` script:
 
 ```json
 {
   "scripts": {
-    "prepare": "skills experimental_sync -y"
+    "prepare": "skills sync -y"
   }
 }
 ```
@@ -320,12 +319,17 @@ provided, and preserves skills installed separately with `skills add`.
 | `--copy`                  | Copy packaged skills instead of linking them                  |
 | `--no-cleanup`            | Keep skills that are no longer provided                       |
 | `--no-remote`             | Skip installing and removing remote skills                    |
-| `--include <patterns...>` | Include packaged skills by package or `package#skill` pattern |
-| `--exclude <patterns...>` | Exclude packaged skills by package or `package#skill` pattern |
+| `--include <patterns...>` | Include skills by package or `package#skill` pattern          |
+| `--exclude <patterns...>` | Exclude skills by package or `package#skill` pattern          |
 | `-r, --recursive`         | Also read dependencies of workspace packages                  |
 
-The include/exclude filters currently apply to packaged skills, not remote `skills`
-entries. Eve always receives copies because it rewrites skill frontmatter.
+The include/exclude filters apply to both packaged and remote skills. For remote
+skills, the package pattern matches the package declaring the entry (`.` for the
+project's own field). Eve always receives copies because it rewrites skill frontmatter.
+
+## Experimental commands
+
+These commands are still experimental. Their names, options, and behavior may change.
 
 ### Restore skills from the project lock file
 

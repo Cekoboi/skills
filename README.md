@@ -46,6 +46,7 @@ private repositories, and all options.
 | `npx skills find [query]`         | Search for skills                |
 | `npx skills list`                 | List installed skills            |
 | `npx skills use <source>@<skill>` | Use one skill without installing |
+| `npx skills sync`                 | Sync skills from npm dependencies |
 | `npx skills check`                | Check for available updates      |
 | `npx skills update [skills...]`   | Update installed skills          |
 | `npx skills remove [skills...]`   | Remove installed skills          |
@@ -69,12 +70,12 @@ Some npm packages bundle instructions for your agent alongside their code:
 
 ```bash
 npm install -D skills agent-browser
-npx skills experimental_sync -y
+npx skills sync -y
 ```
 
-This experimental command links packaged skills into your project so they update with
+Sync links packaged skills into your project so they update with
 the dependency. It also supports skill packs declared in `package.json`.
-See [npm skills and automatic setup](docs/commands.md#sync-skills-from-npm-packages).
+See [npm skills and automatic setup](docs/commands.md#skills-sync).
 
 ## Supported Agents
 
