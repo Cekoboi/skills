@@ -175,4 +175,4 @@ npm publish
 
 1. Add the agent definition to `src/agents.ts`
 2. Run `pnpm run -C scripts validate-agents.ts` to validate
-3. Run `pnpm run -C scripts sync-agents.ts` to update README.md and package keywords
+3. Run `pnpm run -C scripts sync-agents.ts` to update README.md, generated docs, and package keywords
