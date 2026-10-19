@@ -46,7 +46,7 @@ private repositories, and all options.
 | `npx skills find [query]`         | Search for skills                |
 | `npx skills list`                 | List installed skills            |
 | `npx skills use <source>@<skill>` | Use one skill without installing |
-| `npx skills sync`                 | Sync skills from npm dependencies |
+| `npx skills experimental_sync`    | Sync skills from npm dependencies (experimental) |
 | `npx skills check`                | Check for available updates      |
 | `npx skills update [skills...]`   | Update installed skills          |
 | `npx skills remove [skills...]`   | Remove installed skills          |
@@ -64,18 +64,19 @@ npx skills use vercel-labs/agent-skills@web-design-guidelines --agent claude-cod
 
 Omit `--agent` to print the prompt instead. See [`skills use`](docs/commands.md#skills-use).
 
-## Sync Skills from npm Packages
+## Sync Skills from npm Packages (Experimental)
 
 Some npm packages bundle instructions for your agent alongside their code:
 
 ```bash
 npm install -D skills agent-browser
-npx skills sync -y
+npx skills experimental_sync -y
 ```
 
 Sync links packaged skills into your project so they update with
 the dependency. It also supports skill packs declared in `package.json`.
-See [npm skills and automatic setup](docs/commands.md#skills-sync).
+This feature is experimental; its options and behavior may change as we iterate.
+See [npm skills and automatic setup](docs/commands.md#skills-experimental_sync).
 
 ## Supported Agents
 
