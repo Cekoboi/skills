@@ -1,12 +1,20 @@
-import { spawnSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { join, dirname, relative, sep } from 'path';
-import { fileURLToPath } from 'url';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 
-import { readSkillLock, getGitHubToken, type SkillLockEntry } from './skill-lock.ts';
-import { computeSkillFolderHash, readLocalLock, type LocalSkillLockEntry } from './local-lock.ts';
+import {
+  readSkillLock,
+  getGitHubToken,
+  addSkillToLock,
+  type SkillLockEntry,
+} from './skill-lock.ts';
+import {
+  computeSkillFolderHash,
+  readLocalLock,
+  addSkillToLocalLock,
+  type LocalSkillLockEntry,
+} from './local-lock.ts';
 import {
   formatSourceInput,
   buildUpdateInstallSource,
@@ -18,6 +26,21 @@ import { cloneRepo, cleanupTempDir, getGitTreeHash } from './git.ts';
 import { discoverSkills } from './skills.ts';
 import { fetchRepoTree, getSkillFolderHashFromTree, type RepoTree } from './blob.ts';
 import { mapConcurrent } from './concurrency.ts';
+import { parseSource } from './source-parser.ts';
+import {
+  buildInstallTargets,
+  defaultInstallMode,
+  fetchSources,
+  installFetched,
+  installToTargets,
+  nonInteractiveTargetAgents,
+  recordGlobalWellKnownLock,
+  recordProjectLock,
+  releaseSource,
+  type InstallPlacement,
+  type ResolvedSkills,
+  type TargetInstallResult,
+} from './add.ts';
 import {
   resolveSkillLocations,
   type DiscoveredSkillLocation,
@@ -31,8 +54,6 @@ import { track } from './telemetry.ts';
 import { agents, isUniversalAgent } from './agents.ts';
 import type { AgentType } from './types.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[38;5;102m';
@@ -41,6 +62,55 @@ const TEXT = '\x1b[38;5;145m';
 function printFetching(sourceCount: number): void {
   if (sourceCount === 0) return;
   console.log(`${DIM}Fetching ${sourceCount} source${sourceCount === 1 ? '' : 's'}…${RESET}`);
+}
+
+/**
+ * Where a reinstalled skill goes: what `add -y` would pick, with Eve fanned
+ * out over the subagents recorded at install time (`''` is the root agent).
+ * Agent detection runs once per resolver.
+ */
+function placementResolver(global: boolean): (subagents?: string[]) => Promise<InstallPlacement> {
+  let agentsPromise: Promise<AgentType[]> | undefined;
+  return async (subagents) => {
+    agentsPromise ??= nonInteractiveTargetAgents();
+    let targetAgents = await agentsPromise;
+    const hasSubagents = !!subagents?.length;
+    if (hasSubagents && !targetAgents.includes('eve')) targetAgents = [...targetAgents, 'eve'];
+    const targets = buildInstallTargets(
+      targetAgents,
+      hasSubagents ? subagents.map((s) => (s === '' ? undefined : s)) : [undefined]
+    );
+    return {
+      global,
+      targets,
+      mode: defaultInstallMode(targets),
+      createMissingAgentRoot: (agent) => hasSubagents && agent === 'eve',
+    };
+  };
+}
+
+/** Print per-target failures and the skill's verdict; true when at least one target took it. */
+function reportInstall(
+  name: string,
+  outcome: { ok: boolean; failed: string[]; error?: string }
+): boolean {
+  const safeName = sanitizeMetadata(name);
+  for (const failure of outcome.failed) console.log(`  ${DIM}✗ ${failure}${RESET}`);
+  if (outcome.ok && !outcome.error) {
+    console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
+    return true;
+  }
+  console.log(
+    `  ${DIM}✗ Failed to update ${safeName}${outcome.error ? `: ${outcome.error}` : ''}${RESET}`
+  );
+  return false;
+}
+
+function targetOutcome(results: TargetInstallResult[]): { ok: boolean; failed: string[] } {
+  return {
+    ok: results.some((r) => r.success),
+    failed: results.filter((r) => !r.success).map((r) => `${r.agent}: ${r.error}`),
+  };
 }
 
 // ============================================
@@ -62,11 +132,8 @@ export interface UpdateCheckOptions {
  * skill subpath. Pin that shorthand to github.com so an ambient GH_HOST for a
  * GitHub Enterprise account cannot redirect an existing public installation.
  */
-function getUpdateChildEnv(sourceType: string): NodeJS.ProcessEnv | undefined {
-  if (sourceType !== 'github') {
-    return undefined;
-  }
-  return { ...process.env, GH_HOST: 'github.com' };
+function parseUpdateSource(installUrl: string, sourceType: string) {
+  return parseSource(installUrl, sourceType === 'github' ? { githubHost: 'github.com' } : {});
 }
 
 export function parseUpdateOptions(args: string[]): UpdateCheckOptions {
@@ -432,6 +499,8 @@ export async function processWellKnownUpdates(
     checkWellKnownForUpdates(baseUrl, items)
   );
 
+  const pending: Array<{ baseUrl: string; items: WellKnownUpdateItem[]; changedSkills: string[] }> =
+    [];
   for (const [index, [baseUrl, items]] of entries.entries()) {
     process.stdout.write(`\r${DIM}Checking skills from source: ${baseUrl}${RESET}\x1b[K\n`);
 
@@ -452,54 +521,35 @@ export async function processWellKnownUpdates(
     await promptDeletions(baseUrl, result.removedSkills, isGlobal, options);
     printNewSkills(baseUrl, result.newSkills, isGlobal);
 
-    if (result.changedSkills.length === 0) continue;
-
-    const cliEntry = join(__dirname, '..', 'bin', 'cli.mjs');
-    if (!existsSync(cliEntry)) {
-      failCount += result.changedSkills.length;
-      console.log(`  ${DIM}✗ CLI entrypoint not found at ${cliEntry}${RESET}`);
-      continue;
+    if (result.changedSkills.length > 0) {
+      pending.push({ baseUrl, items, changedSkills: result.changedSkills });
     }
+  }
 
+  const fetched = await fetchSources(
+    pending.map(({ baseUrl, changedSkills }) => ({
+      parsed: parseSource(baseUrl),
+      skills: changedSkills,
+    }))
+  );
+  const placementFor = placementResolver(isGlobal);
+
+  for (const [index, { baseUrl, items, changedSkills }] of pending.entries()) {
+    const source = fetched[index]!;
     const itemByName = new Map(items.map((item) => [item.name, item]));
-
-    for (const name of result.changedSkills) {
-      const safeName = sanitizeMetadata(name);
-      console.log(`${TEXT}Updating ${safeName}…${RESET}`);
-
-      const subagents = itemByName.get(name)?.subagents;
-      const subagentArgs =
-        !isGlobal && subagents?.length
-          ? ['--subagent', ...subagents.map((s) => (s === '' ? 'root' : s))]
-          : [];
-
-      const spawnResult = spawnSync(
-        process.execPath,
-        [
-          cliEntry,
-          'add',
-          baseUrl,
-          '--skill',
-          name,
-          ...subagentArgs,
-          ...(isGlobal ? ['-g'] : []),
-          '-y',
-        ],
-        {
-          stdio: ['inherit', 'pipe', 'pipe'],
-          encoding: 'utf-8',
-          shell: false,
-        }
-      );
-
-      if (spawnResult.status === 0) {
-        successCount++;
-        console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
-      } else {
-        failCount++;
-        console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
-      }
+    // One install per skill: each may record different Eve subagents.
+    for (const name of changedSkills) {
+      console.log(`${TEXT}Updating ${sanitizeMetadata(name)}…${RESET}`);
+      const outcome = await installFetched(source, {
+        skills: [name],
+        placement: await placementFor(isGlobal ? undefined : itemByName.get(name)?.subagents),
+      });
+      if (isGlobal) await recordGlobalWellKnownLock(baseUrl, outcome.installed);
+      else await recordProjectLock(source, outcome.installed);
+      if (reportInstall(name, { ok: outcome.installed.length > 0, ...outcome })) successCount++;
+      else failCount++;
     }
+    await releaseSource(source);
   }
 
   return { successCount, failCount, changed };
@@ -551,7 +601,12 @@ export async function updateGlobalSkills(
     return { successCount, failCount, checkedCount: 0 };
   }
 
-  const updates: Array<{ name: string; source: string; entry: SkillLockEntry }> = [];
+  const updates: Array<{
+    name: string;
+    entry: SkillLockEntry;
+    /** Upstream hash of the skill folder, recorded once the reinstall succeeds. */
+    skillFolderHash: string;
+  }> = [];
   const skipped: SkippedSkill[] = [];
   const checkable: Array<{ name: string; entry: SkillLockEntry }> = [];
   const wellKnownGroups = new Map<string, WellKnownUpdateItem[]>();
@@ -614,7 +669,7 @@ export async function updateGlobalSkills(
 
   const groups = [...bySource.values()];
   printFetching(groups.length);
-  const fetched = await mapConcurrent(groups, (itemsForSource) => {
+  const checkouts = await mapConcurrent(groups, (itemsForSource) => {
     const firstEntry = itemsForSource[0]!.entry;
     return fetchGlobalSource(
       firstEntry,
@@ -626,7 +681,7 @@ export async function updateGlobalSkills(
     const firstEntry = itemsForSource[0]!.entry;
     const source = firstEntry.source;
     const isGitHubSource = firstEntry.sourceType === 'github';
-    const checkout = fetched[index]!;
+    const checkout = checkouts[index]!;
 
     process.stdout.write(`\r${DIM}Checking skills from source: ${source}${RESET}\x1b[K\n`);
 
@@ -639,7 +694,7 @@ export async function updateGlobalSkills(
       for (const { name: skillName, entry } of itemsForSource) {
         const latestHash = getSkillFolderHashFromTree(checkout.tree, entry.skillPath!);
         if (latestHash && latestHash !== entry.skillFolderHash) {
-          updates.push({ name: skillName, source, entry });
+          updates.push({ name: skillName, entry, skillFolderHash: latestHash });
         }
       }
       continue;
@@ -685,7 +740,11 @@ export async function updateGlobalSkills(
           : await computeSkillFolderHash(join(tempDir, dirname(skillPath)));
         const relocated = skillPath !== entry.skillPath;
         if (relocated || (latestHash && latestHash !== entry.skillFolderHash)) {
-          updates.push({ name: skillName, source, entry: { ...entry, skillPath } });
+          updates.push({
+            name: skillName,
+            entry: { ...entry, skillPath },
+            skillFolderHash: latestHash ?? '',
+          });
         }
       }
     } catch (error) {
@@ -730,50 +789,39 @@ export async function updateGlobalSkills(
   console.log(`${TEXT}Found ${updates.length} global update(s)${RESET}`);
   console.log();
 
-  for (const update of updates) {
-    const safeName = sanitizeMetadata(update.name);
-    console.log(`${TEXT}Updating ${safeName}…${RESET}`);
+  // Each update is fetched on its own (its skill folder as the subpath), as
+  // `add` would, so eligible GitHub repos take the blob fast path.
+  const installable = updates.flatMap((update) => {
     const installUrl = buildUpdateInstallSource(update.entry);
-    if (!installUrl) {
-      failCount++;
-      console.log(
-        `  ${DIM}✗ Cannot update ${safeName}: lock file is missing sourceUrl for this generic Git source${RESET}`
-      );
-      continue;
-    }
-
-    const cliEntry = join(__dirname, '..', 'bin', 'cli.mjs');
-    if (!existsSync(cliEntry)) {
-      failCount++;
-      console.log(
-        `  ${DIM}✗ Failed to update ${safeName}: CLI entrypoint not found at ${cliEntry}${RESET}`
-      );
-      continue;
-    }
-    const fullDepthArgs = shouldUseFullDepthForUpdate(update.entry) ? ['--full-depth'] : [];
-    const result = spawnSync(
-      process.execPath,
-      [cliEntry, 'add', installUrl, '--skill', update.name, ...fullDepthArgs, '-g', '-y'],
-      {
-        stdio: ['inherit', 'pipe', 'pipe'],
-        encoding: 'utf-8',
-        env: getUpdateChildEnv(update.entry.sourceType),
-        // Never spawn through a shell. process.execPath is an absolute path to the
-        // node binary, so no shell is needed to resolve it. installUrl is derived
-        // from the lock file (and ref is URL-decoded, so influenceable by whoever
-        // publishes a skill); a shell on Windows would let metacharacters in that
-        // value inject commands. Passing argv directly keeps it inert.
-        shell: false,
-      }
+    if (installUrl) return [{ ...update, installUrl }];
+    failCount++;
+    console.log(
+      `  ${DIM}✗ Cannot update ${sanitizeMetadata(update.name)}: lock file is missing sourceUrl for this generic Git source${RESET}`
     );
+    return [];
+  });
+  const fetched = await fetchSources(
+    installable.map(({ entry, name, installUrl }) => ({
+      parsed: parseUpdateSource(installUrl, entry.sourceType),
+      skills: [name],
+      fullDepth: shouldUseFullDepthForUpdate(entry),
+    }))
+  );
+  const placementFor = placementResolver(true);
 
-    if (result.status === 0) {
-      successCount++;
-      console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
-    } else {
-      failCount++;
-      console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
+  for (const [index, { name, entry, skillFolderHash }] of installable.entries()) {
+    console.log(`${TEXT}Updating ${sanitizeMetadata(name)}…${RESET}`);
+    const source = fetched[index]!;
+    const outcome = await installFetched(source, {
+      skills: [name],
+      placement: await placementFor(),
+    });
+    await releaseSource(source);
+    if (outcome.installed.length > 0) {
+      await addSkillToLock(name, { ...entry, skillFolderHash });
     }
+    if (reportInstall(name, { ok: outcome.installed.length > 0, ...outcome })) successCount++;
+    else failCount++;
   }
 
   printSkippedSkills(skipped);
@@ -875,17 +923,8 @@ export async function updateProjectSkills(
   }
 
   const localLock = await readLocalLock();
-  const cliEntry = join(__dirname, '..', 'bin', 'cli.mjs');
+  const placementFor = placementResolver(false);
   let upToDateCount = 0;
-
-  if (updatable.length > 0 && !existsSync(cliEntry)) {
-    console.log(`${DIM}✗ CLI entrypoint not found at ${cliEntry}${RESET}`);
-    return {
-      successCount,
-      failCount: failCount + updatable.length,
-      foundCount: projectSkills.length,
-    };
-  }
 
   const groups = [...bySource.values()].map((skillsForSource) => ({
     skillsForSource,
@@ -909,9 +948,6 @@ export async function updateProjectSkills(
       .map(([name, _]) => name);
 
     const tempDir = clones[index]!;
-    let deletedSkills: string[] = [];
-    let resolvedPaths: Map<string, string> | null = null;
-    const latestHashes = new Map<string, string>();
 
     if (cloneSource === null) {
       failCount += skillsForSource.length;
@@ -927,6 +963,7 @@ export async function updateProjectSkills(
       continue;
     }
 
+    let checked = false;
     try {
       const discovered = await discoverSkills(tempDir, undefined, {
         fullDepth: true,
@@ -947,93 +984,43 @@ export async function updateProjectSkills(
         discoveredLocations,
         { exactPathDisambiguates: !shouldUseFullDepthForUpdate(firstEntry) }
       );
-      deletedSkills = resolution.deletedSkills;
-      resolvedPaths = resolution.resolvedPaths;
+      checked = true;
+      const deleted = new Set(resolution.deletedSkills);
+      const skillAt = new Map(discovered.map((s, i) => [discoveredLocations[i]!.skillPath, s]));
+      const resolved: ResolvedSkills = { skills: discovered, tempDir, blobResult: null };
 
-      // Hash each remaining skill in the clone the same way `add` records
-      // computedHash, so unchanged skills are not reinstalled.
-      for (const [name, skillPath] of resolution.resolvedPaths) {
-        try {
-          const hash = await computeSkillFolderHash(join(tempDir, dirname(skillPath)));
-          if (hash) latestHashes.set(name, hash);
-        } catch {
-          // Unknown hash: fall through to reinstalling the skill.
+      for (const skill of skillsForSource) {
+        if (deleted.has(skill.name)) continue;
+        const skillPath = resolution.resolvedPaths.get(skill.name);
+        const current = skillPath && skillAt.get(skillPath);
+        if (!skillPath || !current) continue;
+
+        // Hash the clone the same way `add` records computedHash, so an
+        // unchanged skill is not reinstalled.
+        const computedHash = await computeSkillFolderHash(current.path).catch(() => null);
+        if (skillPath === skill.entry.skillPath && computedHash === skill.entry.computedHash) {
+          upToDateCount++;
+          continue;
         }
+
+        console.log(`${TEXT}Updating ${sanitizeMetadata(skill.name)}…${RESET}`);
+        const results = await installToTargets(
+          resolved,
+          [current],
+          await placementFor(skill.entry.subagents)
+        );
+        const outcome = targetOutcome(results);
+        if (outcome.ok && computedHash) {
+          await addSkillToLocalLock(skill.name, { ...skill.entry, skillPath, computedHash });
+        }
+        if (reportInstall(skill.name, outcome)) successCount++;
+        else failCount++;
       }
     } catch {
       console.log(`${DIM}✗ Failed to check for deleted skills from ${source}${RESET}`);
+      if (!checked) failCount += skillsForSource.length;
     } finally {
       await cleanupTempDir(tempDir);
-    }
-
-    if (resolvedPaths === null) {
-      failCount += skillsForSource.length;
-      continue;
-    }
-
-    const remainingSkills = skillsForSource.filter((s) => !deletedSkills.includes(s.name));
-
-    for (const skill of remainingSkills) {
-      const safeName = sanitizeMetadata(skill.name);
-      const resolvedPath = resolvedPaths?.get(skill.name);
-      if (resolvedPaths && !resolvedPath) {
-        continue;
-      }
-      const entry = resolvedPath ? { ...skill.entry, skillPath: resolvedPath } : skill.entry;
-      const relocated = entry.skillPath !== skill.entry.skillPath;
-      const latestHash = latestHashes.get(skill.name);
-      if (!relocated && latestHash && latestHash === skill.entry.computedHash) {
-        upToDateCount++;
-        continue;
-      }
-      console.log(`${TEXT}Updating ${safeName}…${RESET}`);
-      const installUrl = buildLocalUpdateSource(entry);
-      if (!installUrl) {
-        failCount++;
-        console.log(
-          `  ${DIM}✗ Cannot update ${safeName}: skills-lock.json is missing sourceUrl for this generic Git source${RESET}`
-        );
-        continue;
-      }
-
-      // Preserve Eve subagent placement recorded at install time. The lock stores
-      // '' for the root agent, which maps to the `root` keyword for `add --subagent`.
-      const subagentArgs = skill.entry.subagents?.length
-        ? ['--subagent', ...skill.entry.subagents.map((s) => (s === '' ? 'root' : s))]
-        : [];
-      const fullDepthArgs = shouldUseFullDepthForUpdate(entry) ? ['--full-depth'] : [];
-
-      const result = spawnSync(
-        process.execPath,
-        [
-          cliEntry,
-          'add',
-          installUrl,
-          '--skill',
-          skill.name,
-          ...subagentArgs,
-          ...fullDepthArgs,
-          '-y',
-        ],
-        {
-          stdio: ['inherit', 'pipe', 'pipe'],
-          encoding: 'utf-8',
-          env: getUpdateChildEnv(entry.sourceType),
-          // Never spawn through a shell — same reasoning as updateGlobalSkills:
-          // execPath is absolute (no shell resolution needed) and installUrl/ref
-          // come from the lock file, so a shell would allow command injection on
-          // Windows. Pass argv directly instead.
-          shell: false,
-        }
-      );
-
-      if (result.status === 0) {
-        successCount++;
-        console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
-      } else {
-        failCount++;
-        console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
-      }
     }
   }
 
