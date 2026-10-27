@@ -24,6 +24,10 @@ vi.mock('../src/git.ts', () => ({
   cleanupTempDir: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The suite itself runs in CI, where --frozen-lockfile would otherwise default on
+vi.mock('../src/ci.ts', () => ({ isCI: () => false }));
+
+import * as p from '@clack/prompts';
 import { runInstallFromLock } from '../src/install.ts';
 import { cloneRepo } from '../src/git.ts';
 import { wellKnownProvider, type WellKnownSkill } from '../src/providers/index.ts';
@@ -154,5 +158,19 @@ describe('skills install fetches sources in parallel', () => {
     ).resolves.toContain('name: beta');
     expect(process.exitCode).toBe(1);
     process.exitCode = undefined;
+  });
+
+  it('verifies a well-known skill against the lock under --frozen-lockfile', async () => {
+    const fixture = await writeFixtureRepo('alpha');
+    vi.mocked(cloneRepo).mockResolvedValue(fixture);
+    const errors = vi.spyOn(p.log, 'error');
+    const before = await readFile(join(process.cwd(), 'skills-lock.json'), 'utf-8');
+
+    await runInstallFromLock(['--frozen-lockfile']);
+
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
+    expect(errors.mock.calls.flat().join('\n')).toContain('gamma has changed');
+    await expect(readFile(join(process.cwd(), 'skills-lock.json'), 'utf-8')).resolves.toBe(before);
   });
 });

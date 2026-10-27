@@ -53,7 +53,10 @@ import {
   addSkillToLocalLock,
   readLocalLock,
   computeSkillFolderHash,
+  frozenLockfileError,
+  lockChangeReason,
   type LocalSkillLockEntry,
+  type LocalSkillLockFile,
 } from './local-lock.ts';
 import type { Skill, AgentType, ParsedSource } from './types.ts';
 import {
@@ -1550,7 +1553,8 @@ export function projectPlacement(agents: AgentType[]): InstallPlacement {
 
 /**
  * Install a fetched source at project scope into `agents` and record the
- * project lock (with `via` when given).
+ * project lock (with `via` when given). With `frozenLock`, every skill must
+ * match its lock entry instead and the lock is left untouched.
  */
 export async function installFromSource(
   fetched: FetchedSource,
@@ -1559,11 +1563,27 @@ export async function installFromSource(
     agents: AgentType[];
     via?: string;
     select?: (skills: Skill[]) => Promise<Skill[]>;
+    frozenLock?: LocalSkillLockFile;
   }
 ): Promise<SourceInstallResult> {
+  const { frozenLock } = options;
   const outcome = await installFetched(fetched, {
-    ...options,
+    skills: options.skills,
     placement: projectPlacement(options.agents),
+    select: async (skills) => {
+      const selected = options.select ? await options.select(skills) : skills;
+      if (!frozenLock) return selected;
+      // Refuse changed content before writing it; well-known skills can only be hashed once installed
+      const changes: string[] = [];
+      for (const skill of selected) {
+        if (isWellKnownSourceSkill(skill)) continue;
+        const hash = await sourceSkillHash(skill);
+        const reason = lockChangeReason(frozenLock, skill.name, { computedHash: hash });
+        if (reason) changes.push(reason);
+      }
+      if (changes.length > 0) throw new Error(frozenLockfileError(changes));
+      return selected;
+    },
   });
   const result: SourceInstallResult = {
     installed: outcome.installed.map(({ skill }) => getSkillDisplayName(skill)),
@@ -1571,7 +1591,14 @@ export async function installFromSource(
     ...(outcome.error && { error: outcome.error }),
   };
   try {
-    await recordProjectLock(fetched, outcome.installed, options.via);
+    if (frozenLock) {
+      const changes = outcome.installed.flatMap(
+        ({ skill, hash }) => lockChangeReason(frozenLock, skill.name, { computedHash: hash }) ?? []
+      );
+      if (changes.length > 0) result.error = frozenLockfileError(changes);
+    } else {
+      await recordProjectLock(fetched, outcome.installed, options.via);
+    }
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
   } finally {
