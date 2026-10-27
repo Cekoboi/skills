@@ -51,6 +51,7 @@ import {
 } from './skill-lock.ts';
 import {
   addSkillToLocalLock,
+  readLocalLock,
   computeSkillFolderHash,
   type LocalSkillLockEntry,
 } from './local-lock.ts';
@@ -856,6 +857,9 @@ async function handleWellKnownSkills(
 
     installGlobally = scope as boolean;
   }
+
+  // Surface an unusable lock before touching disk rather than after installing.
+  if (!installGlobally) await readLocalLock();
 
   // Determine install mode (symlink vs copy)
   let installMode: InstallMode = options.copy ? 'copy' : 'symlink';
@@ -2080,6 +2084,9 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
 
       installGlobally = scope as boolean;
     }
+
+    // Surface an unusable lock before touching disk rather than after installing.
+    if (!installGlobally) await readLocalLock();
 
     // Determine install mode (symlink vs copy)
     let installMode: InstallMode = options.copy ? 'copy' : 'symlink';
