@@ -1394,4 +1394,56 @@ describe('Update Cleanup Unit Tests', () => {
       expect(process.exitCode).toBeUndefined();
     });
   });
+
+  describe('check', () => {
+    it('picks a scope without prompting and installs no project update', async () => {
+      vi.mocked(localLock.readLocalLock).mockResolvedValue({
+        version: 1,
+        skills: {
+          'skill-a': {
+            source: 'owner/repo',
+            skillPath: 'skills/skill-a/SKILL.md',
+            sourceType: 'github',
+            computedHash: 'old',
+          },
+        },
+      });
+      vi.mocked(git.cloneRepo).mockResolvedValue('/tmp/repo');
+      vi.mocked(skills.discoverSkills).mockResolvedValue([
+        { name: 'skill-a', path: '/tmp/repo/skills/skill-a', description: 'A', rawContent: '' },
+      ]);
+      vi.mocked(localLock.computeSkillFolderHash).mockResolvedValue('new');
+
+      await runUpdate([], 'check');
+
+      expect(p.select).not.toHaveBeenCalled();
+      expect(add.installToTargets).not.toHaveBeenCalled();
+    });
+
+    it('installs no global update', async () => {
+      vi.mocked(skillLock.readSkillLock).mockResolvedValue({
+        version: 3,
+        skills: {
+          'skill-a': {
+            source: 'owner/repo',
+            skillPath: 'skills/skill-a/SKILL.md',
+            sourceType: 'github',
+            skillFolderHash: 'old',
+            installedAt: '',
+            updatedAt: '',
+          },
+        },
+      });
+      vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+        sha: 'rootsha',
+        branch: 'main',
+        tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'sha1' }],
+      });
+      vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('new');
+
+      await runUpdate(['-g'], 'check');
+
+      expect(add.installFetched).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -171,6 +171,8 @@ Check installed skills for available updates without reinstalling them:
 npx skills check
 ```
 
+It exits with code 1 when any skill has an update, so it can gate CI.
+
 ## `skills update`
 
 ```bash
