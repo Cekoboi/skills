@@ -47,6 +47,7 @@ import {
   type SkillLocationResolution,
   type SkillLocationResolutionOptions,
 } from './skill-relocation.ts';
+import { listInstalledSkills } from './installer.ts';
 import { wellKnownProvider, computeWellKnownSkillDigest } from './providers/index.ts';
 import { removeCommand } from './remove.ts';
 import { sanitizeMetadata } from './sanitize.ts';
@@ -104,6 +105,11 @@ function reportInstall(
     `  ${DIM}✗ Failed to update ${safeName}${outcome.error ? `: ${outcome.error}` : ''}${RESET}`
   );
   return false;
+}
+
+/** Skills present on disk in a scope; a locked skill missing here is reinstalled. */
+async function installedSkillNames(global: boolean): Promise<Set<string>> {
+  return new Set((await listInstalledSkills({ global })).map((skill) => skill.name));
 }
 
 function targetOutcome(results: TargetInstallResult[]): { ok: boolean; failed: string[] } {
@@ -667,6 +673,7 @@ export async function updateGlobalSkills(
       .filter(([_, entry]) => entry.source === first.source && entry.ref === first.ref)
       .map(([name, _]) => name);
 
+  const onDisk = await installedSkillNames(true);
   const groups = [...bySource.values()];
   printFetching(groups.length);
   const checkouts = await mapConcurrent(groups, (itemsForSource) => {
@@ -693,7 +700,7 @@ export async function updateGlobalSkills(
     if ('tree' in checkout) {
       for (const { name: skillName, entry } of itemsForSource) {
         const latestHash = getSkillFolderHashFromTree(checkout.tree, entry.skillPath!);
-        if (latestHash && latestHash !== entry.skillFolderHash) {
+        if (latestHash && (latestHash !== entry.skillFolderHash || !onDisk.has(skillName))) {
           updates.push({ name: skillName, entry, skillFolderHash: latestHash });
         }
       }
@@ -739,7 +746,10 @@ export async function updateGlobalSkills(
           ? await getGitTreeHash(tempDir, skillPath)
           : await computeSkillFolderHash(join(tempDir, dirname(skillPath)));
         const relocated = skillPath !== entry.skillPath;
-        if (relocated || (latestHash && latestHash !== entry.skillFolderHash)) {
+        if (
+          relocated ||
+          (latestHash && (latestHash !== entry.skillFolderHash || !onDisk.has(skillName)))
+        ) {
           updates.push({
             name: skillName,
             entry: { ...entry, skillPath },
@@ -923,6 +933,7 @@ export async function updateProjectSkills(
   }
 
   const localLock = await readLocalLock();
+  const onDisk = await installedSkillNames(false);
   const placementFor = placementResolver(false);
   let upToDateCount = 0;
 
@@ -998,7 +1009,11 @@ export async function updateProjectSkills(
         // Hash the clone the same way `add` records computedHash, so an
         // unchanged skill is not reinstalled.
         const computedHash = await computeSkillFolderHash(current.path).catch(() => null);
-        if (skillPath === skill.entry.skillPath && computedHash === skill.entry.computedHash) {
+        if (
+          skillPath === skill.entry.skillPath &&
+          computedHash === skill.entry.computedHash &&
+          onDisk.has(skill.name)
+        ) {
           upToDateCount++;
           continue;
         }
