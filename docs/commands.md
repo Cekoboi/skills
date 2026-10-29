@@ -366,6 +366,7 @@ npm packages or create agent-specific links for restored skills.
 
 | Option                 | Description                                                 |
 | ---------------------- | ----------------------------------------------------------- |
+| `--dry-run`            | Show what would be restored without installing anything     |
 | `--frozen-lockfile`    | Fail instead of changing `skills-lock.json` (default in CI) |
 | `--no-frozen-lockfile` | Allow `skills-lock.json` to change in CI                    |
 

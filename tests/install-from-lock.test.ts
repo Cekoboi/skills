@@ -68,6 +68,20 @@ describe('experimental_install', () => {
     expect(lock.skills.alpha.computedHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('prints the plan and writes nothing with --dry-run', () => {
+    writeSkill(join(testDir, 'src-a', 'alpha'), 'alpha');
+    writeLock({ alpha: './src-a' });
+    const before = readFileSync(join(testDir, 'skills-lock.json'), 'utf-8');
+
+    const result = runCli(['experimental_install', '--dry-run'], testDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(installed('alpha')).toBe(false);
+    expect(readFileSync(join(testDir, 'skills-lock.json'), 'utf-8')).toBe(before);
+    expect(result.stdout).toContain('Would restore 1 skill');
+    expect(result.stdout).toContain('alpha');
+  });
+
   it('keeps restoring after a source fails', () => {
     writeSkill(join(testDir, 'src-b', 'beta'), 'beta');
     writeLock({ alpha: './missing', beta: './src-b' });
