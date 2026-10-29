@@ -93,6 +93,40 @@ describe('experimental_install', () => {
     expect(installed('beta')).toBe(true);
   });
 
+  describe('already installed skills', () => {
+    const installedContent = () =>
+      readFileSync(join(testDir, '.agents', 'skills', 'alpha', 'SKILL.md'), 'utf-8');
+
+    beforeEach(() => {
+      writeSkill(join(testDir, 'src-a', 'alpha'), 'alpha');
+      writeLock({ alpha: './src-a' });
+      mkdirSync(join(testDir, '.agents', 'skills', 'alpha'), { recursive: true });
+      writeFileSync(join(testDir, '.agents', 'skills', 'alpha', 'SKILL.md'), 'edited');
+    });
+
+    it('are left as they are', () => {
+      const result = runCli(['experimental_install'], testDir);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('1 skill already installed');
+      expect(installedContent()).toBe('edited');
+    });
+
+    it('are restored when the folder has no SKILL.md', () => {
+      rmSync(join(testDir, '.agents', 'skills', 'alpha', 'SKILL.md'));
+
+      expect(runCli(['experimental_install'], testDir).exitCode).toBe(0);
+      expect(installedContent()).toContain('name: alpha');
+    });
+
+    it('are reinstalled with --force', () => {
+      const result = runCli(['experimental_install', '--force'], testDir);
+
+      expect(result.exitCode).toBe(0);
+      expect(installedContent()).toContain('name: alpha');
+    });
+  });
+
   describe('--frozen-lockfile', () => {
     const lockFile = () => readFileSync(join(testDir, 'skills-lock.json'), 'utf-8');
 
