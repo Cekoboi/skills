@@ -40,17 +40,9 @@ When a user asks for help with something, identify:
 2. The specific task (e.g., writing tests, creating animations, reviewing PRs)
 3. Whether this is a common enough task that a skill likely exists
 
-### Step 2: Check the Leaderboard First
+### Step 2: Search for Skills
 
-Before running a CLI search, check the [skills.sh leaderboard](https://skills.sh/) to see if a well-known skill already exists for the domain. The leaderboard ranks skills by total installs, surfacing the most popular and battle-tested options.
-
-For example, top skills for web development include:
-- `vercel-labs/agent-skills` — React, Next.js, web design (100K+ installs each)
-- `anthropics/skills` — Frontend design, document processing (100K+ installs)
-
-### Step 3: Search for Skills
-
-If the leaderboard doesn't cover the user's need, run the find command:
+Run the find command first — it works without web browsing and returns live results:
 
 ```bash
 npx skills find [query] [--owner <owner>]
@@ -61,6 +53,15 @@ For example:
 - User asks "how do I make my React app faster?" → `npx skills find react performance`
 - User asks "can you help me with PR reviews?" → `npx skills find pr review`
 - User asks "I need to create a changelog" → `npx skills find changelog`
+
+### Step 3: Optionally Check the Leaderboard
+
+If the CLI search returns nothing useful and you can browse the web, the [skills.sh leaderboard](https://skills.sh/) ranks skills by total installs, surfacing the most popular and battle-tested options.
+
+For example, top skills for web development include:
+
+- `vercel-labs/agent-skills` — React, Next.js, web design (100K+ installs each)
+- `anthropics/skills` — Frontend design, document processing (100K+ installs)
 
 ### Step 4: Verify Quality Before Recommending
 
