@@ -9,7 +9,7 @@ structure and rhythm, and replaces the truck with a bicycle built from recognisa
 
 | File | What |
 | --- | --- |
-| `out/higgsfield-claude-launch.mp4` | Final film: 30.0 s, 1920×1080, 30 fps, H.264 High + AAC 320k |
+| `out/higgsfield-claude-launch.mp4` | Final film: 30.0 s, 1920×1080, 30 fps, H.264 High (22 Mb/s, 2-pass) + AAC 320k |
 | `out/audio.wav` | Mixed soundtrack (48 kHz stereo): original score + SFX |
 | `out/cue-sheet.json` | Every SFX cue with its time (generated from the edit) |
 | `out/contact-sheet.png` | One frame per shot |
