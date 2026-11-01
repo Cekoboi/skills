@@ -1,0 +1,19 @@
+{
+  "name": "higgsfield-claude-launch-film",
+  "version": "1.0.0",
+  "description": "30s 3D launch film: Higgsfield MCP x Claude (Opus 5.5) - bicycle build",
+  "scripts": {
+    "serve": "node scripts/serve.js",
+    "audio": "node scripts/audio.js",
+    "render": "node scripts/render.js",
+    "preview": "node scripts/render.js --preview",
+    "film": "node scripts/audio.js && node scripts/render.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "opentype.js": "^1.3.4",
+    "three": "^0.169.0"
+  },
+  "private": true,
+  "type": "module"
+}

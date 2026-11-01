@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Higgsfield MCP × Claude — Launch Film</title>
+<meta name="viewport" content="width=1920, height=1080" />
+<style>
+  @font-face { font-family: 'Inter'; src: url(assets/fonts/Inter-400.ttf); font-weight: 400; }
+  @font-face { font-family: 'Inter'; src: url(assets/fonts/Inter-500.ttf); font-weight: 500; }
+  @font-face { font-family: 'Inter'; src: url(assets/fonts/Inter-600.ttf); font-weight: 600; }
+  @font-face { font-family: 'Inter'; src: url(assets/fonts/Inter-700.ttf); font-weight: 700; }
+  @font-face { font-family: 'Manrope'; src: url(assets/fonts/Manrope-500.ttf); font-weight: 500; }
+  @font-face { font-family: 'Manrope'; src: url(assets/fonts/Manrope-700.ttf); font-weight: 700; }
+  @font-face { font-family: 'Manrope'; src: url(assets/fonts/Manrope-800.ttf); font-weight: 800; }
+  @font-face { font-family: 'Space Grotesk'; src: url(assets/fonts/SpaceGrotesk-500.ttf); font-weight: 500; }
+  @font-face { font-family: 'Space Grotesk'; src: url(assets/fonts/SpaceGrotesk-700.ttf); font-weight: 700; }
+  html, body { margin: 0; background: #111; overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
+  #gl { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+  #overlay { position: absolute; inset: 0; }
+</style>
+<script type="importmap">
+  { "imports": {
+      "three": "./node_modules/three/build/three.module.js",
+      "three/addons/": "./node_modules/three/examples/jsm/",
+      "opentype.js": "./node_modules/opentype.js/dist/opentype.module.js"
+  } }
+</script>
+</head>
+<body>
+  <div id="stage"><canvas id="gl" width="1920" height="1080"></canvas><div id="overlay"></div></div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
